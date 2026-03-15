@@ -13,6 +13,7 @@ try:
         Ppmd7Encoder,
         Ppmd8Decoder,
         Ppmd8Encoder,
+        Ppmd8gDecoder,
         PpmdError,
     )
 except ImportError:
@@ -27,7 +28,7 @@ except ImportError:
             PpmdError,
         )
     except ImportError:
-        msg = "pyppmd module: Neither C implementation nor CFFI " "implementation can be imported."
+        msg = "pyppmd_gentee module: Neither C implementation nor CFFI " "implementation can be imported."
         raise ImportError(msg)
 
 __all__ = (
@@ -39,6 +40,7 @@ __all__ = (
     "Ppmd7Decoder",
     "Ppmd8Encoder",
     "Ppmd8Decoder",
+    "Ppmd8gDecoder",
     "PpmdError",
 )
 
@@ -46,11 +48,9 @@ __doc__ = """\
 Python bindings to PPMd compression library, the API is similar to
 Python's bz2/lzma/zlib module.
 
-Documentation: https://pyppmd.readthedocs.io
-Github: https://github.com/miurahr/pyppmd
-PyPI: https://pypi.org/project/pyppmd"""
+Based on: https://github.com/miurahr/pyppmd"""
 
-__copyright__ = "Copyright (C) 2020,2021 Hiroshi Miura"
+__copyright__ = "Copyright (C) 2020,2021 Hiroshi Miura; 2026 Joel Puig Rubio"
 
 try:
     __version__ = version(__name__)

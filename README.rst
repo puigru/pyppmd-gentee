@@ -1,36 +1,56 @@
-PyPPMd
-======
+PyPPMd-Gentee
+=============
 
+A fork of `pyppmd <https://github.com/miurahr/pyppmd>`_ that adds the Gentee PPMd-I
+variant decoder (``Ppmd8gDecoder``). Installable alongside the official ``pyppmd`` package.
 
-.. image:: https://badge.fury.io/py/pyppmd.svg
-  :target: https://badge.fury.io/py/pyppmd
+Install with ``pip install pyppmd-gentee``, then ``import pyppmd_gentee``.
 
-.. image:: https://img.shields.io/conda/vn/conda-forge/pyppmd
-  :target: https://anaconda.org/conda-forge/pyppmd
-
-.. image:: https://readthedocs.org/projects/pyppmd/badge/?version=latest
-  :target: https://pyppmd.readthedocs.io/en/latest/?badge=latest
-
-.. image:: https://dev.azure.com/miurahr/CodeBerg/_apis/build/status%2FCodeBerg-pyppmd-CI?branchName=main
-  :target: https://dev.azure.com/miurahr/CodeBerg/_build/latest?definitionId=29&branchName=main
 
 Introduction
 ------------
 
-``pyppmd`` module provides classes and functions for compressing and decompressing text data,
-using PPM(Prediction by partial matching) compression algorithm which has several variations of implementations.
-PPMd is the implementation by Dmitry Shkarin.
-PyPPMD use Igor Pavlov's range coder introduced in 7-zip.
-
-The API is similar to Python's bz2/lzma/zlib module.
-
-Some parts of th codes are derived from ``7-zip``, ``pyzstd`` and ``ppmd-cffi``.
+``pyppmd_gentee`` provides the same classes and functions as ``pyppmd`` for compressing
+and decompressing data using the PPMd algorithm, plus ``Ppmd8gDecoder`` — a variant
+of PPMd-I that implements the Gentee installer's modified codec.
 
 
 Development status
 ------------------
 
 A project status is considered as ``Stable``.
+
+Gentee PPMd-I variant
+---------------------
+
+``Ppmd8gDecoder`` decodes data compressed with the PPMd variant used in Gentee installers.
+It differs from the standard PPMd-I codec in BinSumm initialization, frequency updates,
+and model restore behaviour.
+
+.. code-block:: python
+
+    import pyppmd_gentee
+
+    dec = pyppmd_gentee.Ppmd8gDecoder(max_order=6, mem_size=16 << 20)
+    result = dec.decode(compressed_data, expected_length)
+
+For streaming across multiple files (as in GEA archives), use ``lightweight_reset()``
+or ``reinit()`` between entries to manage the decoder state:
+
+.. code-block:: python
+
+    dec = pyppmd_gentee.Ppmd8gDecoder(max_order=6, mem_size=16 << 20)
+
+    first_file = dec.decode(chunk_0, length_0)
+
+    dec.lightweight_reset()  # keeps model, resets context to root
+    second_file = dec.decode(chunk_1, length_1)
+
+    dec.reinit(6)  # full model rebuild
+    third_file = dec.decode(chunk_2, length_2)
+
+See ``examples/extract_stardef.py`` for a complete example that downloads and extracts
+a Gentee-based installer using ``Ppmd8gDecoder``.
 
 Extra input byte
 ----------------

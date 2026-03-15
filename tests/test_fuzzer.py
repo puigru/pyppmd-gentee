@@ -4,7 +4,7 @@ from datetime import timedelta
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-import pyppmd
+import pyppmd_gentee as pyppmd
 
 if sys.maxsize > 2**32:
     MAX_SIZE = 1 << 30

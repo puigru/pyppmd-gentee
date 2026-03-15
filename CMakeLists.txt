@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.19)
-project(pyppmd C CXX)
+project(pyppmd_gentee C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
@@ -17,8 +17,8 @@ set(Python_FIND_STRATEGY VERSION)
 find_package(Python ${PY_VERSION}.0...${PY_VERSION}.99 COMPONENTS Interpreter Development)
 set(PY_EXT_FILE _ppmd)
 set(PY_CFFI_FILE _cffi_ppmd)
-set(PY_EXT_DIR pyppmd/c)
-set(PY_CFFI_DIR pyppmd/cffi)
+set(PY_EXT_DIR pyppmd_gentee/c)
+set(PY_CFFI_DIR pyppmd_gentee/cffi)
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/get_ext.py
      "import sysconfig\nprint(sysconfig.get_config_var('EXT_SUFFIX'))\n")
 execute_process(
@@ -152,7 +152,7 @@ add_custom_target(run_pytest
 # for build test and analytics
 include_directories(src/lib/ppmd src/lib/buffer)
 add_library(
-        pyppmd
+        pyppmd_gentee
         src/lib/ppmd/Arch.h
         src/lib/ppmd/Interface.h
         src/lib/ppmd/Ppmd.h
@@ -171,8 +171,8 @@ add_library(
         src/lib/buffer/ThreadDecoder.c
         src/lib/buffer/ThreadDecoder.h
         src/ext/_ppmdmodule.c)
-target_include_directories(pyppmd PRIVATE ${Python_INCLUDE_DIRS})
-target_link_libraries(pyppmd PRIVATE ${Python_LIBRARIES})
+target_include_directories(pyppmd_gentee PRIVATE ${Python_INCLUDE_DIRS})
+target_link_libraries(pyppmd_gentee PRIVATE ${Python_LIBRARIES})
 # ##################################################################################################
 add_custom_target(run_tox
         COMMAND  ${CMAKE_COMMAND} -E env VIRTUAL_ENV=${VENV_PATH} ${VENV_PATH}/bin/python -m tox

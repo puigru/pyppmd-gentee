@@ -17,9 +17,9 @@ sys.path.insert(0, os.path.abspath('../src/'))
 
 # -- Project information -----------------------------------------------------
 
-project = 'pyppmd'
-copyright = '2021, Hiroshi Miura'
-author = 'Hiroshi Miura'
+project = 'pyppmd-gentee'
+copyright = '2021, Hiroshi Miura; 2026, Joel Puig Rubio'
+author = 'Hiroshi Miura, Joel Puig Rubio'
 
 
 # -- General configuration ---------------------------------------------------
@@ -60,13 +60,13 @@ html_theme = 'sphinx_rtd_theme'
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ['_static']
 html_theme_options = {
-    'description': 'pyppmd -- PPMd compression library',
+    'description': 'pyppmd-gentee -- PPMd compression library with Gentee variant',
     'github_banner': True,
-    'github_user': 'miurahr',
-    'github_repo': 'pyppmd',
+    'github_user': 'puigru',
+    'github_repo': 'pyppmd-gentee',
     'page_width': 'auto',
     'badge_branch': 'main',
-    'donate_url': 'https://liberapay.com/miurahr',
+    # 'donate_url': 'https://liberapay.com/miurahr',
 }
 html_title = 'PyPPMd compression library'
 html_short_title = 'PyPPMd docs'

@@ -7,6 +7,26 @@ This code is based on:
 #ifndef __PPMD8_H
 #define __PPMD8_H
 
+#ifdef PPMD8_GENTEE
+/* Rename all public symbols so Ppmd8.c can be compiled twice:
+   once as standard PPMd-I, once as Gentee variant. */
+#define PPMD8_kExpEscape       PPMD8g_kExpEscape
+#define Ppmd8_Construct        Ppmd8g_Construct
+#define Ppmd8_Alloc            Ppmd8g_Alloc
+#define Ppmd8_Free             Ppmd8g_Free
+#define Ppmd8_Init             Ppmd8g_Init
+#define Ppmd8_Update1          Ppmd8g_Update1
+#define Ppmd8_Update1_0        Ppmd8g_Update1_0
+#define Ppmd8_Update2          Ppmd8g_Update2
+#define Ppmd8_UpdateBin        Ppmd8g_UpdateBin
+#define Ppmd8_MakeEscFreq      Ppmd8g_MakeEscFreq
+#define Ppmd8_RangeDec_Init    Ppmd8g_RangeDec_Init
+#define Ppmd8_DecodeSymbol     Ppmd8g_DecodeSymbol
+#define Ppmd8_RangeEnc_Init    Ppmd8g_RangeEnc_Init
+#define Ppmd8_RangeEnc_FlushData Ppmd8g_RangeEnc_FlushData
+#define Ppmd8_EncodeSymbol     Ppmd8g_EncodeSymbol
+#endif
+
 #include "Ppmd.h"
 
 #define PPMD8_MIN_ORDER 2

@@ -17,6 +17,14 @@
 #include "Ppmd7.h"
 #include "Ppmd8.h"
 
+/* Gentee variant declarations (compiled from Ppmd8g.c / Ppmd8gDec.c) */
+void Ppmd8g_Construct(CPpmd8 *p);
+Bool Ppmd8g_Alloc(CPpmd8 *p, UInt32 size, IAllocPtr alloc);
+void Ppmd8g_Free(CPpmd8 *p, IAllocPtr alloc);
+void Ppmd8g_Init(CPpmd8 *p, unsigned maxOrder, unsigned restoreMethod);
+Bool Ppmd8g_RangeDec_Init(CPpmd8 *p);
+int  Ppmd8g_DecodeSymbol(CPpmd8 *p);
+
 #include "Buffer.h"
 #include "ThreadDecoder.h"
 
@@ -133,11 +141,27 @@ typedef struct {
     char inited2;
 } Ppmd8Decoder;
 
+/* Ppmd8gDecoder: Gentee variant of PPMd-I decoder (decode-only, no threading) */
+typedef struct {
+    PyObject_HEAD
+    PyThread_type_lock lock;
+    CPpmd8 *cPpmd8;
+    char *input_buffer;
+    size_t input_buffer_size;
+    size_t in_begin, in_end;
+    PyObject *unused_data;
+    char needs_input;
+    char eof;
+    char inited;
+    char inited2;
+} Ppmd8gDecoder;
+
 typedef struct {
     PyTypeObject *Ppmd7Encoder_type;
     PyTypeObject *Ppmd7Decoder_type;
     PyTypeObject *Ppmd8Encoder_type;
     PyTypeObject *Ppmd8Decoder_type;
+    PyTypeObject *Ppmd8gDecoder_type;
     PyObject *PpmdError;
 } _ppmd_state;
 
@@ -1397,6 +1421,416 @@ static PyType_Spec Ppmd8Decoder_type_spec = {
         .slots = Ppmd8Decoder_slots,
 };
 
+/* ----------------------------
+     Ppmd8gDecoder code
+     (Gentee PPMd-I variant)
+   ---------------------------- */
+
+/* Simple byte reader for Ppmd8g — reads from InBuffer, signals when empty */
+typedef struct {
+    Byte (*Read)(void *p);
+    InBuffer *inBuffer;
+    Bool stalled;
+} Ppmd8gReader;
+
+static Byte Ppmd8g_SimpleReader(void *pp) {
+    Ppmd8gReader *r = (Ppmd8gReader *)pp;
+    InBuffer *in = r->inBuffer;
+    if (in->pos < in->size) {
+        return ((const Byte *)in->src)[in->pos++];
+    }
+    r->stalled = True;
+    return 0;
+}
+
+static PyObject *
+Ppmd8gDecoder_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
+{
+    Ppmd8gDecoder *self;
+    self = (Ppmd8gDecoder*)type->tp_alloc(type, 0);
+    if (self == NULL)
+        return NULL;
+    assert(self->inited == 0);
+    assert(self->inited2 == 0);
+    self->lock = PyThread_allocate_lock();
+    if (self->lock == NULL) {
+        Py_XDECREF(self);
+        return PyErr_NoMemory();
+    }
+    return (PyObject*)self;
+}
+
+static void
+Ppmd8gDecoder_dealloc(Ppmd8gDecoder *self) {
+    if (self->lock)
+        PyThread_free_lock(self->lock);
+    if (self->cPpmd8 != NULL) {
+        Ppmd8gReader *reader = (Ppmd8gReader *)self->cPpmd8->Stream.In;
+        if (reader != NULL) {
+            PyMem_Free(reader->inBuffer);
+            PyMem_Free(reader);
+        }
+        Ppmd8g_Free(self->cPpmd8, &allocator);
+        PyMem_Free(self->cPpmd8);
+    }
+    if (self->input_buffer != NULL)
+        PyMem_Free(self->input_buffer);
+    PyTypeObject *tp = Py_TYPE(self);
+    tp->tp_free((PyObject*)self);
+    Py_DECREF(tp);
+}
+
+PyDoc_STRVAR(Ppmd8gDecoder_doc,
+    "A Gentee PPMd-I variant decoder.\n\n"
+    "Ppmd8gDecoder.__init__(self, max_order, mem_size)\n"
+    "----\n"
+    "Initialize a Ppmd8gDecoder object.\n\n"
+    "Arguments\n"
+    "max_order: max order for the PPM modelling ranging from 2 to 16.\n"
+    "mem_size:  max memory size in bytes.\n"
+);
+
+static int
+Ppmd8gDecoder_init(Ppmd8gDecoder *self, PyObject *args, PyObject *kwargs)
+{
+    static char *kwlist[] = {"max_order", "mem_size", NULL};
+    PyObject *max_order = Py_None;
+    PyObject *mem_size = Py_None;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs,
+                                     "OO:Ppmd8gDecoder.__init__", kwlist,
+                                     &max_order, &mem_size)) {
+        return -1;
+    }
+    if (self->inited) {
+        PyErr_SetString(PyExc_RuntimeError, init_twice_msg);
+        return -1;
+    }
+    self->inited = 1;
+    self->needs_input = 1;
+
+    unsigned long maximum_order = 6;
+    unsigned long memory_size = 16 << 20;
+
+    if (max_order != Py_None && PyLong_Check(max_order)) {
+        maximum_order = PyLong_AsUnsignedLong(max_order);
+        if (maximum_order == (unsigned long)-1 && PyErr_Occurred()) {
+            PyErr_SetString(PyExc_ValueError, "max_order out of range");
+            return -1;
+        }
+    }
+    clamp_max_order(&maximum_order, PPMD8_MAX_ORDER);
+
+    if (mem_size != Py_None && PyLong_Check(mem_size)) {
+        memory_size = PyLong_AsUnsignedLong(mem_size);
+        if (memory_size == (unsigned long)-1 && PyErr_Occurred()) {
+            PyErr_SetString(PyExc_ValueError, "mem_size out of range");
+            return -1;
+        }
+    }
+    clamp_memory_size(&memory_size);
+
+    self->cPpmd8 = PyMem_Malloc(sizeof(CPpmd8));
+    if (self->cPpmd8 == NULL) {
+        PyErr_NoMemory();
+        return -1;
+    }
+    Ppmd8g_Construct(self->cPpmd8);
+    if (!Ppmd8g_Alloc(self->cPpmd8, memory_size, &allocator)) {
+        PyMem_Free(self->cPpmd8);
+        self->cPpmd8 = NULL;
+        PyErr_NoMemory();
+        return -1;
+    }
+    Ppmd8g_Init(self->cPpmd8, maximum_order, PPMD8_RESTORE_METHOD_RESTART);
+
+    Ppmd8gReader *reader = PyMem_Malloc(sizeof(Ppmd8gReader));
+    if (reader == NULL) {
+        Ppmd8g_Free(self->cPpmd8, &allocator);
+        PyMem_Free(self->cPpmd8);
+        self->cPpmd8 = NULL;
+        PyErr_NoMemory();
+        return -1;
+    }
+    InBuffer *in = PyMem_Malloc(sizeof(InBuffer));
+    if (in == NULL) {
+        PyMem_Free(reader);
+        Ppmd8g_Free(self->cPpmd8, &allocator);
+        PyMem_Free(self->cPpmd8);
+        self->cPpmd8 = NULL;
+        PyErr_NoMemory();
+        return -1;
+    }
+    reader->Read = Ppmd8g_SimpleReader;
+    reader->inBuffer = in;
+    reader->stalled = False;
+    in->src = NULL;
+    in->size = 0;
+    in->pos = 0;
+    self->cPpmd8->Stream.In = (IByteIn *)reader;
+    return 0;
+}
+
+PyDoc_STRVAR(Ppmd8gDecoder_decode_doc, "decode()\n"
+             "----\n"
+             "Decode data using Gentee PPMd-I variant.");
+
+static PyObject *
+Ppmd8gDecoder_decode(Ppmd8gDecoder *self, PyObject *args, PyObject *kwargs) {
+    static char *kwlist[] = {"data", "length", NULL};
+    Py_buffer data;
+    int length = -1;
+    PyObject *ret = NULL;
+    char use_input_buffer;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs,
+                                     "y*|i:Ppmd8gDecoder.decode", kwlist,
+                                     &data, &length)) {
+        return NULL;
+    }
+
+    if (self->inited2 == 0 && data.len < 5) {
+        PyErr_SetString(PyExc_ValueError,
+                        "Not enough data for starting decompression.");
+        PyBuffer_Release(&data);
+        return NULL;
+    }
+
+    ACQUIRE_LOCK(self);
+
+    Ppmd8gReader *reader = (Ppmd8gReader *)self->cPpmd8->Stream.In;
+    InBuffer *in = reader->inBuffer;
+
+    /* Prepare input buffer w/wo unconsumed data */
+    if (self->in_begin == self->in_end) {
+        use_input_buffer = 0;
+        in->src = data.buf;
+        in->size = data.len;
+        in->pos = 0;
+    } else if (data.len == 0) {
+        use_input_buffer = 1;
+        in->src = self->input_buffer + self->in_begin;
+        in->size = self->in_end - self->in_begin;
+        in->pos = 0;
+    } else {
+        use_input_buffer = 1;
+        const size_t used_now = self->in_end - self->in_begin;
+        const size_t avail_total = self->input_buffer_size - used_now;
+        const size_t avail_now = self->input_buffer_size - self->in_end;
+
+        if (avail_total < (size_t)data.len) {
+            const size_t new_size = used_now + data.len;
+            char *tmp = PyMem_Malloc(new_size);
+            if (tmp == NULL) {
+                PyErr_NoMemory();
+                RELEASE_LOCK(self);
+                PyBuffer_Release(&data);
+                return NULL;
+            }
+            memcpy(tmp, self->input_buffer + self->in_begin, used_now);
+            PyMem_Free(self->input_buffer);
+            self->input_buffer = tmp;
+            self->input_buffer_size = new_size;
+            self->in_begin = 0;
+            self->in_end = used_now;
+        } else if (avail_now < (size_t)data.len) {
+            memcpy(self->input_buffer,
+                   self->input_buffer + self->in_begin, used_now);
+            self->in_begin = 0;
+            self->in_end = used_now;
+        }
+        memcpy(self->input_buffer + self->in_end, data.buf, data.len);
+        self->in_end += data.len;
+        in->src = self->input_buffer + self->in_begin;
+        in->size = used_now + data.len;
+        in->pos = 0;
+    }
+
+    if (self->inited2 == 0) {
+        if (!Ppmd8g_RangeDec_Init(self->cPpmd8)) {
+            RELEASE_LOCK(self);
+            PyBuffer_Release(&data);
+            return NULL;
+        }
+        self->inited2++;
+    }
+
+    /* Decode symbols directly (no threading) */
+    int remains = length >= 0 ? length : INT_MAX;
+    size_t out_cap = remains < 65536 ? (size_t)remains : 65536;
+    size_t out_pos = 0;
+    char *out_buf = PyMem_Malloc(out_cap);
+    if (out_buf == NULL) {
+        PyErr_NoMemory();
+        RELEASE_LOCK(self);
+        PyBuffer_Release(&data);
+        return NULL;
+    }
+
+    reader->stalled = False;
+    while (remains > 0 && !reader->stalled) {
+        int c = Ppmd8g_DecodeSymbol(self->cPpmd8);
+        if (reader->stalled) {
+            /* Input exhausted mid-symbol — stop, retain state */
+            self->needs_input = True;
+            break;
+        }
+        if (c == -1) { /* EOF marker */
+            self->eof = True;
+            self->needs_input = False;
+            break;
+        }
+        if (c == -2) { /* Data error */
+            PyErr_SetString(PyExc_ValueError, "Corrupted input data.");
+            PyMem_Free(out_buf);
+            RELEASE_LOCK(self);
+            PyBuffer_Release(&data);
+            return NULL;
+        }
+        if (out_pos == out_cap) {
+            size_t new_cap = out_cap * 2;
+            if (new_cap > (size_t)INT_MAX) new_cap = (size_t)INT_MAX;
+            char *tmp = PyMem_Realloc(out_buf, new_cap);
+            if (tmp == NULL) {
+                PyErr_NoMemory();
+                PyMem_Free(out_buf);
+                RELEASE_LOCK(self);
+                PyBuffer_Release(&data);
+                return NULL;
+            }
+            out_buf = tmp;
+            out_cap = new_cap;
+        }
+        out_buf[out_pos++] = (char)(Byte)c;
+        remains--;
+    }
+
+    ret = PyBytes_FromStringAndSize(out_buf, (Py_ssize_t)out_pos);
+    PyMem_Free(out_buf);
+
+    /* Unconsumed input data */
+    if (in->pos == in->size) {
+        if (use_input_buffer) {
+            self->in_begin = 0;
+            self->in_end = 0;
+        }
+    } else {
+        const size_t data_size = in->size - in->pos;
+        self->needs_input = False;
+        if (!use_input_buffer) {
+            if (self->input_buffer != NULL &&
+                self->input_buffer_size < data_size) {
+                PyMem_Free(self->input_buffer);
+                self->input_buffer = NULL;
+                self->input_buffer_size = 0;
+            }
+            if (self->input_buffer == NULL) {
+                self->input_buffer = PyMem_Malloc(data_size);
+                if (self->input_buffer == NULL) {
+                    PyErr_NoMemory();
+                    RELEASE_LOCK(self);
+                    PyBuffer_Release(&data);
+                    return NULL;
+                }
+                self->input_buffer_size = data_size;
+            }
+            memcpy(self->input_buffer, (char*)in->src + in->pos, data_size);
+            self->in_begin = 0;
+            self->in_end = data_size;
+        } else {
+            self->in_begin += in->pos;
+        }
+    }
+
+    RELEASE_LOCK(self);
+    PyBuffer_Release(&data);
+    return ret;
+}
+
+PyDoc_STRVAR(Ppmd8gDecoder_reinit_doc, "reinit(max_order)\n"
+             "----\n"
+             "Full model rebuild (like first stream). Resets decoder state.");
+
+static PyObject *
+Ppmd8gDecoder_reinit(Ppmd8gDecoder *self, PyObject *args) {
+    unsigned int max_order;
+    if (!PyArg_ParseTuple(args, "I:reinit", &max_order))
+        return NULL;
+    ACQUIRE_LOCK(self);
+    Ppmd8g_Init(self->cPpmd8, max_order, PPMD8_RESTORE_METHOD_RESTART);
+    self->inited2 = 0;
+    self->eof = 0;
+    self->needs_input = 1;
+    self->in_begin = 0;
+    self->in_end = 0;
+    RELEASE_LOCK(self);
+    Py_RETURN_NONE;
+}
+
+PyDoc_STRVAR(Ppmd8gDecoder_lightweight_reset_doc, "lightweight_reset()\n"
+             "----\n"
+             "Lightweight reset for Gentee streaming: walk suffix chain to root,\n"
+             "keep model intact, reset MinContext=MaxContext.");
+
+static PyObject *
+Ppmd8gDecoder_lightweight_reset(Ppmd8gDecoder *self, PyObject *Py_UNUSED(ignored)) {
+    ACQUIRE_LOCK(self);
+    CPpmd8 *p = self->cPpmd8;
+    /* Walk MaxContext up the suffix chain to find root and compute OrderFall */
+    CPpmd8_Context *c = p->MaxContext;
+    p->OrderFall = p->MaxOrder;
+    while (c->Suffix != 0) {
+        c = Ppmd8_GetContext(p, c->Suffix);
+        p->OrderFall--;
+    }
+    p->FoundState = Ppmd8_GetStats(p, c);
+    p->MinContext = p->MaxContext;
+    self->inited2 = 0;
+    self->eof = 0;
+    self->needs_input = 1;
+    self->in_begin = 0;
+    self->in_end = 0;
+    RELEASE_LOCK(self);
+    Py_RETURN_NONE;
+}
+
+static PyMethodDef Ppmd8gDecoder_methods[] = {
+    {"decode", (PyCFunction)Ppmd8gDecoder_decode,
+               METH_VARARGS|METH_KEYWORDS, Ppmd8gDecoder_decode_doc},
+    {"reinit", (PyCFunction)Ppmd8gDecoder_reinit,
+               METH_VARARGS, Ppmd8gDecoder_reinit_doc},
+    {"lightweight_reset", (PyCFunction)Ppmd8gDecoder_lightweight_reset,
+               METH_NOARGS, Ppmd8gDecoder_lightweight_reset_doc},
+    {"__reduce__", (PyCFunction)reduce_cannot_pickle,
+               METH_NOARGS, reduce_cannot_pickle_doc},
+    {NULL, NULL, 0, NULL}
+};
+
+static PyMemberDef Ppmd8gDecoder_members[] = {
+    {"eof", T_BOOL, offsetof(Ppmd8gDecoder, eof),
+     READONLY, Ppmd8Decoder_eof__doc},
+    {"needs_input", T_BOOL, offsetof(Ppmd8gDecoder, needs_input),
+     READONLY, Ppmd8Decoder_needs_input_doc},
+    {NULL}
+};
+
+static PyType_Slot Ppmd8gDecoder_slots[] = {
+    {Py_tp_new, Ppmd8gDecoder_new},
+    {Py_tp_dealloc, Ppmd8gDecoder_dealloc},
+    {Py_tp_init, Ppmd8gDecoder_init},
+    {Py_tp_methods, Ppmd8gDecoder_methods},
+    {Py_tp_members, Ppmd8gDecoder_members},
+    {Py_tp_doc, (char *)Ppmd8gDecoder_doc},
+    {0, 0}
+};
+
+static PyType_Spec Ppmd8gDecoder_type_spec = {
+    .name = "_ppmd.Ppmd8gDecoder",
+    .basicsize = sizeof(Ppmd8gDecoder),
+    .flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+    .slots = Ppmd8gDecoder_slots,
+};
+
 /* -----------------------
      Ppmd8Encoder code
    ----------------------- */
@@ -1744,6 +2178,12 @@ PyInit__ppmd(void) {
                            "Ppmd8Decoder",
                            &Ppmd8Decoder_type_spec,
                            &static_state.Ppmd8Decoder_type) < 0) {
+        goto error;
+    }
+    if (add_type_to_module(module,
+                           "Ppmd8gDecoder",
+                           &Ppmd8gDecoder_type_spec,
+                           &static_state.Ppmd8gDecoder_type) < 0) {
         goto error;
     }
     return module;

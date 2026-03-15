@@ -369,6 +369,32 @@ static void RestartModel(CPpmd8 *p)
     SetSuccessor(s, 0);
   }
 
+#ifdef PPMD8_GENTEE
+  /* Gentee BinSumm init: QTable-equivalent traversal (197 entries)
+   * differs from reference NS2Indx (260 entries) at row 24 */
+  {
+    Byte qTab[198];
+    for (i = 0; i < 5; i++) qTab[i] = (Byte)i;
+    {
+      unsigned gsz = 1, gval = 5, cd = 1;
+      for (i = 5; i < 196; i++) {
+        qTab[i] = (Byte)gval;
+        if (--cd == 0) { gsz++; gval++; cd = gsz; }
+      }
+      qTab[196] = (Byte)(gval + 1);
+    }
+    unsigned qi = 0;
+    for (m = 0; m < 25; m++) {
+      while (qTab[qi] == m) qi++;
+      for (k = 0; k < 8; k++) {
+        UInt16 val = (UInt16)(PPMD_BIN_SCALE - kInitBinEsc[k] / (qi + 1));
+        UInt16 *dest = p->BinSumm[m] + k;
+        for (r = 0; r < 64; r += 8)
+          dest[r] = val;
+      }
+    }
+  }
+#else
   for (i = m = 0; m < 25; m++)
   {
     while (p->NS2Indx[i] == m)
@@ -381,6 +407,7 @@ static void RestartModel(CPpmd8 *p)
         dest[r] = val;
     }
   }
+#endif
 
   for (i = m = 0; m < 24; m++)
   {
@@ -628,16 +655,22 @@ static CTX_PTR CreateSuccessors(CPpmd8 *p, Bool skip, CPpmd_State *s1, CTX_PTR c
     else if (c->NumStats != 0)
     {
       for (s = STATS(c); s->Symbol != p->FoundState->Symbol; s++);
+#ifndef PPMD8_GENTEE
       if (s->Freq < MAX_FREQ - 9)
       {
         s->Freq++;
         c->SummFreq++;
       }
+#endif
     }
     else
     {
       s = ONE_STATE(c);
+#ifdef PPMD8_GENTEE
+      /* Gentee: no freq bump during suffix walk */
+#else
       s->Freq = (Byte)(s->Freq + (!SUFFIX(c)->NumStats & (s->Freq < 24)));
+#endif
     }
     successor = SUCCESSOR(s);
     if (successor != upBranch)
@@ -649,6 +682,12 @@ static CTX_PTR CreateSuccessors(CPpmd8 *p, Bool skip, CPpmd_State *s1, CTX_PTR c
     }
     ps[numPs++] = s;
   }
+
+#ifdef PPMD8_GENTEE
+  /* Gentee: if stack is empty after walk, return current context */
+  if (numPs == 0)
+    return c;
+#endif
   
   upState.Symbol = *(const Byte *)Ppmd8_GetPtr(p, upBranch);
   SetSuccessor(&upState, upBranch + 1);
@@ -830,13 +869,21 @@ static void UpdateModel(CPpmd8 *p)
   }
   
   c = p->MaxContext;
+#ifdef PPMD8_GENTEE
+  if (p->OrderFall == 0)
+#else
   if (p->OrderFall == 0 && fSuccessor)
+#endif
   {
     CTX_PTR cs = CreateSuccessors(p, True, s, p->MinContext);
     if (cs == 0)
     {
+#ifdef PPMD8_GENTEE
+      RestartModel(p);
+#else
       SetSuccessor(p->FoundState, 0);
       RESTORE_MODEL(c, CTX(fSuccessor));
+#endif
     }
     else
     {
@@ -850,12 +897,20 @@ static void UpdateModel(CPpmd8 *p)
   successor = REF(p->Text);
   if (p->Text >= p->UnitsStart)
   {
+#ifdef PPMD8_GENTEE
+    RestartModel(p);
+#else
     RESTORE_MODEL(c, CTX(fSuccessor)); /* check it */
+#endif
     return;
   }
   
   if (!fSuccessor)
   {
+#ifdef PPMD8_GENTEE
+    SetSuccessor(p->FoundState, successor);
+    fSuccessor = REF(p->MinContext);
+#else
     CTX_PTR cs = ReduceOrder(p, s, p->MinContext);
     if (cs == NULL)
     {
@@ -863,18 +918,35 @@ static void UpdateModel(CPpmd8 *p)
       return;
     }
     fSuccessor = REF(cs);
+#endif
   }
-  else if ((Byte *)Ppmd8_GetPtr(p, fSuccessor) < p->UnitsStart)
+  else
   {
-    CTX_PTR cs = CreateSuccessors(p, False, s, p->MinContext);
-    if (cs == NULL)
+    if ((Byte *)Ppmd8_GetPtr(p, fSuccessor) < p->UnitsStart)
     {
-      RESTORE_MODEL(c, 0);
-      return;
+      CTX_PTR cs = CreateSuccessors(p, False, s, p->MinContext);
+      if (cs == NULL)
+      {
+#ifdef PPMD8_GENTEE
+        RestartModel(p);
+#else
+        RESTORE_MODEL(c, 0);
+#endif
+        return;
+      }
+      fSuccessor = REF(cs);
     }
-    fSuccessor = REF(cs);
+#ifdef PPMD8_GENTEE
+    /* Gentee: OrderFall only decremented when fSuccessor was non-zero */
+    if (--p->OrderFall == 0)
+    {
+      successor = fSuccessor;
+      p->Text -= (p->MaxContext != p->MinContext);
+    }
+#endif
   }
   
+#ifndef PPMD8_GENTEE
   if (--p->OrderFall == 0)
   {
     successor = fSuccessor;
@@ -888,6 +960,7 @@ static void UpdateModel(CPpmd8 *p)
     p->OrderFall = 0;
   }
   #endif
+#endif
   
   s0 = p->MinContext->SummFreq - (ns = p->MinContext->NumStats) - fFreq;
   flag = (Byte)(0x08 * (fSymbol >= 0x40));
@@ -909,7 +982,11 @@ static void UpdateModel(CPpmd8 *p)
           void *oldPtr;
           if (!ptr)
           {
+#ifdef PPMD8_GENTEE
+            RestartModel(p);
+#else
             RESTORE_MODEL(c, CTX(fSuccessor));
+#endif
             return;
           }
           oldPtr = STATS(c);
@@ -925,7 +1002,11 @@ static void UpdateModel(CPpmd8 *p)
       CPpmd_State *s2 = (CPpmd_State*)AllocUnits(p, 0);
       if (!s2)
       {
+#ifdef PPMD8_GENTEE
+        RestartModel(p);
+#else
         RESTORE_MODEL(c, CTX(fSuccessor));
+#endif
         return;
       }
       *s2 = *ONE_STATE(c);
@@ -1037,7 +1118,11 @@ CPpmd_See *Ppmd8_MakeEscFreq(CPpmd8 *p, unsigned numMasked1, UInt32 *escFreq)
   if (p->MinContext->NumStats != 0xFF)
   {
     see = p->See[(size_t)(unsigned)p->NS2Indx[(size_t)(unsigned)p->MinContext->NumStats + 2] - 3] +
+#ifdef PPMD8_GENTEE
+        (p->MinContext->SummFreq <= 11 * ((unsigned)p->MinContext->NumStats + 1)) +
+#else
         (p->MinContext->SummFreq > 11 * ((unsigned)p->MinContext->NumStats + 1)) +
+#endif
         2 * (unsigned)(2 * (unsigned)p->MinContext->NumStats <
         ((unsigned)SUFFIX(p->MinContext)->NumStats + numMasked1)) +
         p->MinContext->Flags;
@@ -1084,7 +1169,11 @@ void Ppmd8_Update1(CPpmd8 *p)
 
 void Ppmd8_Update1_0(CPpmd8 *p)
 {
+#ifdef PPMD8_GENTEE
+  p->PrevSuccess = (2 * p->FoundState->Freq > p->MinContext->SummFreq);
+#else
   p->PrevSuccess = (2 * p->FoundState->Freq >= p->MinContext->SummFreq);
+#endif
   p->RunLength += p->PrevSuccess;
   p->MinContext->SummFreq += 4;
   if ((p->FoundState->Freq += 4) > MAX_FREQ)

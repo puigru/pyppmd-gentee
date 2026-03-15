@@ -17,6 +17,8 @@ kwargs = {
             "src/lib/ppmd/Ppmd7.c",
             "src/lib/ppmd/Ppmd8.c",
             "src/lib/ppmd/Ppmd8Dec.c",
+            "src/lib/ppmd/Ppmd8g.c",
+            "src/lib/ppmd/Ppmd8gDec.c",
             "src/lib/ppmd/Ppmd7Enc.c",
             "src/lib/ppmd/Ppmd8Enc.c",
             "src/lib/ppmd/Ppmd7Dec.c",
@@ -37,10 +39,10 @@ def has_option(option):
 
 if has_option("--cffi") or platform.python_implementation() == "PyPy":
     # packages
-    packages = ["pyppmd", "pyppmd.cffi"]
+    packages = ["pyppmd_gentee", "pyppmd_gentee.cffi"]
 
     # binary extension
-    kwargs["module_name"] = "pyppmd.cffi._cffi_ppmd"
+    kwargs["module_name"] = "pyppmd_gentee.cffi._cffi_ppmd"
 
     sys.path.append("src/ext")
     import ffi_build
@@ -48,10 +50,10 @@ if has_option("--cffi") or platform.python_implementation() == "PyPy":
     binary_extension = ffi_build.get_extension(**kwargs)
 else:  # C implementation
     # packages
-    packages = ["pyppmd", "pyppmd.c"]
+    packages = ["pyppmd_gentee", "pyppmd_gentee.c"]
 
     # binary extension
-    kwargs["name"] = "pyppmd.c._ppmd"
+    kwargs["name"] = "pyppmd_gentee.c._ppmd"
     kwargs["sources"].append("src/ext/_ppmdmodule.c")
 
     binary_extension = Extension(**kwargs)

@@ -5,6 +5,7 @@ from ._ppmd import (
     Ppmd7Encoder,
     Ppmd8Decoder,
     Ppmd8Encoder,
+    Ppmd8gDecoder,
 )
 
 __all__ = (
@@ -14,10 +15,12 @@ __all__ = (
     "Ppmd7Decoder",
     "Ppmd8Encoder",
     "Ppmd8Decoder",
+    "Ppmd8gDecoder",
     "PpmdError",
 )
 
 
 class PpmdError(Exception):
     "Call to the underlying PPMd library failed."
+
     pass

@@ -419,7 +419,7 @@ if __name__ == "__main__":
             "src/lib/buffer/ThreadDecoder.c",
         ],
         "define_macros": [],
-        "module_name": "pyppmd.cffi._cffi_ppmd",
+        "module_name": "pyppmd_gentee.cffi._cffi_ppmd",
     }
     ffibuilder.cdef(defs)
     ffibuilder.set_source(source=source, **kwargs)
